@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Backend API Testing for AI Email Reply Assistant
+Backend API Testing for StreamRoulette Movie Discovery App
 Tests all API endpoints using the public URL
 """
 
@@ -9,13 +9,15 @@ import json
 import sys
 from datetime import datetime
 import time
+import uuid
 
-class EmailReplyAPITester:
+class StreamRouletteAPITester:
     def __init__(self, base_url="https://9b277e5b-c37b-4d0a-8c83-4617d52bead6.preview.emergentagent.com"):
         self.base_url = base_url
         self.tests_run = 0
         self.tests_passed = 0
-        self.session_id = None
+        self.sample_movie_id = None
+        self.sample_spin_id = None
 
     def log_test(self, name, success, details=""):
         """Log test results"""
@@ -49,221 +51,302 @@ class EmailReplyAPITester:
             self.log_test("Health Check", False, str(e))
             return False
 
-    def test_get_email_types(self):
-        """Test get email types endpoint"""
+    def test_get_genres(self):
+        """Test get genres endpoint"""
         try:
-            response = requests.get(f"{self.base_url}/api/email-types", timeout=10)
+            response = requests.get(f"{self.base_url}/api/genres", timeout=10)
             success = response.status_code == 200
             
             if success:
                 data = response.json()
-                email_types = data.get('email_types', [])
-                details = f"Found {len(email_types)} email types: {[t['value'] for t in email_types[:3]]}..."
+                genres = data.get('genres', [])
+                details = f"Found {len(genres)} genres: {genres[:5]}..."
             else:
                 details = f"Status code: {response.status_code}"
                 
-            self.log_test("Get Email Types", success, details)
+            self.log_test("Get Genres", success, details)
             return success
             
         except Exception as e:
-            self.log_test("Get Email Types", False, str(e))
+            self.log_test("Get Genres", False, str(e))
             return False
 
-    def test_get_tones(self):
-        """Test get tones endpoint"""
+    def test_get_moods(self):
+        """Test get moods endpoint"""
         try:
-            response = requests.get(f"{self.base_url}/api/tones", timeout=10)
+            response = requests.get(f"{self.base_url}/api/moods", timeout=10)
             success = response.status_code == 200
             
             if success:
                 data = response.json()
-                tones = data.get('tones', [])
-                details = f"Found {len(tones)} tones: {[t['value'] for t in tones]}"
+                moods = data.get('moods', [])
+                details = f"Found {len(moods)} moods: {moods[:5]}..."
             else:
                 details = f"Status code: {response.status_code}"
                 
-            self.log_test("Get Tones", success, details)
+            self.log_test("Get Moods", success, details)
             return success
             
         except Exception as e:
-            self.log_test("Get Tones", False, str(e))
+            self.log_test("Get Moods", False, str(e))
             return False
 
-    def test_generate_multiple_replies(self):
-        """Test generate multiple replies endpoint"""
-        sample_email = """Subject: Interview Invitation - Software Engineer Position
-
-Dear John,
-
-Thank you for your interest in the Software Engineer position at TechCorp. We were impressed with your application and would like to invite you for an interview.
-
-We have availability for next Tuesday, March 12th at 2:00 PM or Wednesday, March 13th at 10:00 AM. The interview will be conducted via video call and should take approximately 45 minutes.
-
-Please let me know which time works best for you.
-
-Best regards,
-Sarah Johnson
-HR Manager, TechCorp"""
-
+    def test_get_random_movies(self):
+        """Test get random movies endpoint"""
         try:
-            payload = {
-                "original_email": sample_email,
-                "context": "This is a test interview invitation email",
-                "user_name": "Test User"
-            }
-            
-            response = requests.post(
-                f"{self.base_url}/api/generate-replies",
-                json=payload,
-                headers={'Content-Type': 'application/json'},
-                timeout=30
-            )
-            
+            # Test without filters
+            response = requests.get(f"{self.base_url}/api/movies/random", timeout=15)
             success = response.status_code == 200
             
             if success:
                 data = response.json()
-                self.session_id = data.get('session_id')
-                replies = data.get('replies', [])
-                email_type = data.get('email_type')
-                details = f"Generated {len(replies)} replies, Email type: {email_type}, Session ID: {self.session_id[:8]}..."
-            else:
-                try:
-                    error_data = response.json()
-                    details = f"Status: {response.status_code}, Error: {error_data.get('detail', 'Unknown error')}"
-                except:
-                    details = f"Status: {response.status_code}, Response: {response.text[:100]}..."
-                
-            self.log_test("Generate Multiple Replies", success, details)
-            return success
-            
-        except Exception as e:
-            self.log_test("Generate Multiple Replies", False, str(e))
-            return False
-
-    def test_generate_single_reply(self):
-        """Test generate single reply endpoint"""
-        sample_email = """Subject: Job Offer - Marketing Manager Position
-
-Dear Jane,
-
-We are pleased to offer you the position of Marketing Manager at Innovation Inc. After careful consideration, we believe you would be a great fit for our team.
-
-The position comes with a competitive salary of $85,000 per year, full benefits package, and opportunities for professional development.
-
-Please review the attached offer letter and let us know if you would like to accept this position.
-
-Best regards,
-Mike Thompson
-Director of Marketing, Innovation Inc."""
-
-        try:
-            payload = {
-                "original_email": sample_email,
-                "context": "This is a test job offer email",
-                "user_name": "Test User",
-                "email_type": "job_offer",
-                "tone": "enthusiastic"
-            }
-            
-            response = requests.post(
-                f"{self.base_url}/api/generate-single-reply",
-                json=payload,
-                headers={'Content-Type': 'application/json'},
-                timeout=30
-            )
-            
-            success = response.status_code == 200
-            
-            if success:
-                data = response.json()
-                reply_id = data.get('reply_id')
-                email_type = data.get('email_type')
-                tone = data.get('tone')
-                reply_length = len(data.get('reply_content', ''))
-                details = f"Reply ID: {reply_id[:8]}..., Type: {email_type}, Tone: {tone}, Length: {reply_length} chars"
-            else:
-                try:
-                    error_data = response.json()
-                    details = f"Status: {response.status_code}, Error: {error_data.get('detail', 'Unknown error')}"
-                except:
-                    details = f"Status: {response.status_code}, Response: {response.text[:100]}..."
-                
-            self.log_test("Generate Single Reply", success, details)
-            return success
-            
-        except Exception as e:
-            self.log_test("Generate Single Reply", False, str(e))
-            return False
-
-    def test_get_session(self):
-        """Test get session endpoint"""
-        if not self.session_id:
-            self.log_test("Get Session", False, "No session ID available from previous test")
-            return False
-            
-        try:
-            response = requests.get(f"{self.base_url}/api/session/{self.session_id}", timeout=10)
-            success = response.status_code == 200
-            
-            if success:
-                data = response.json()
-                replies_count = len(data.get('replies', []))
-                email_type = data.get('email_type')
-                details = f"Session found with {replies_count} replies, Type: {email_type}"
+                movies = data.get('movies', [])
+                total_available = data.get('total_available', 0)
+                if movies:
+                    self.sample_movie_id = movies[0]['id']
+                details = f"Got {len(movies)} movies, {total_available} total available"
             else:
                 details = f"Status code: {response.status_code}"
                 
-            self.log_test("Get Session", success, details)
+            self.log_test("Get Random Movies (No Filter)", success, details)
+            
+            # Test with filters
+            response2 = requests.get(f"{self.base_url}/api/movies/random?genres=Action,Drama&moods=Thrilling&count=6", timeout=15)
+            success2 = response2.status_code == 200
+            
+            if success2:
+                data2 = response2.json()
+                movies2 = data2.get('movies', [])
+                details2 = f"Filtered: Got {len(movies2)} movies with Action/Drama + Thrilling"
+            else:
+                details2 = f"Filtered request failed: {response2.status_code}"
+                
+            self.log_test("Get Random Movies (With Filters)", success2, details2)
+            return success and success2
+            
+        except Exception as e:
+            self.log_test("Get Random Movies", False, str(e))
+            return False
+
+    def test_get_movie_details(self):
+        """Test get movie details endpoint"""
+        if not self.sample_movie_id:
+            self.log_test("Get Movie Details", False, "No sample movie ID available")
+            return False
+            
+        try:
+            response = requests.get(f"{self.base_url}/api/movies/{self.sample_movie_id}", timeout=10)
+            success = response.status_code == 200
+            
+            if success:
+                data = response.json()
+                title = data.get('title', 'Unknown')
+                rating = data.get('rating', 0)
+                year = data.get('year', 0)
+                details = f"Movie: {title} ({year}), Rating: {rating}"
+            else:
+                details = f"Status code: {response.status_code}"
+                
+            self.log_test("Get Movie Details", success, details)
             return success
             
         except Exception as e:
-            self.log_test("Get Session", False, str(e))
+            self.log_test("Get Movie Details", False, str(e))
             return False
 
-    def test_error_handling(self):
-        """Test error handling with invalid inputs"""
+    def test_filter_movies(self):
+        """Test filter movies endpoint"""
         try:
-            # Test empty email
             payload = {
-                "original_email": "",
-                "context": "",
-                "user_name": ""
+                "genres": ["Action", "Drama"],
+                "moods": ["Thrilling"],
+                "min_rating": 7.0,
+                "max_year": 2020
             }
             
             response = requests.post(
-                f"{self.base_url}/api/generate-replies",
+                f"{self.base_url}/api/movies/filter",
                 json=payload,
                 headers={'Content-Type': 'application/json'},
                 timeout=15
             )
             
-            # Should handle empty email gracefully
-            success = response.status_code in [400, 422, 500]  # Any error status is acceptable
-            details = f"Empty email handled with status: {response.status_code}"
+            success = response.status_code == 200
+            
+            if success:
+                data = response.json()
+                movies = data.get('movies', [])
+                total_count = data.get('total_count', 0)
+                details = f"Filtered {total_count} movies, returned {len(movies)}"
+            else:
+                try:
+                    error_data = response.json()
+                    details = f"Status: {response.status_code}, Error: {error_data.get('detail', 'Unknown error')}"
+                except:
+                    details = f"Status: {response.status_code}, Response: {response.text[:100]}..."
                 
-            self.log_test("Error Handling (Empty Email)", success, details)
+            self.log_test("Filter Movies", success, details)
             return success
             
         except Exception as e:
-            self.log_test("Error Handling (Empty Email)", False, str(e))
+            self.log_test("Filter Movies", False, str(e))
+            return False
+
+    def test_save_spin_result(self):
+        """Test save spin result endpoint"""
+        try:
+            self.sample_spin_id = str(uuid.uuid4())
+            
+            # Create sample spin result
+            payload = {
+                "spin_id": self.sample_spin_id,
+                "selected_movie": {
+                    "id": "1",
+                    "title": "Test Movie",
+                    "genre": ["Action"],
+                    "mood": ["Thrilling"],
+                    "rating": 8.5,
+                    "description": "Test movie description",
+                    "year": 2023,
+                    "poster_url": "https://example.com/poster.jpg",
+                    "trailer_url": "https://example.com/trailer",
+                    "imdb_rating": 8.5
+                },
+                "wheel_movies": [
+                    {
+                        "id": "1",
+                        "title": "Test Movie",
+                        "genre": ["Action"],
+                        "mood": ["Thrilling"],
+                        "rating": 8.5,
+                        "description": "Test movie description",
+                        "year": 2023,
+                        "poster_url": "https://example.com/poster.jpg",
+                        "trailer_url": "https://example.com/trailer",
+                        "imdb_rating": 8.5
+                    }
+                ],
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            response = requests.post(
+                f"{self.base_url}/api/spin",
+                json=payload,
+                headers={'Content-Type': 'application/json'},
+                timeout=15
+            )
+            
+            success = response.status_code == 200
+            
+            if success:
+                data = response.json()
+                spin_id = data.get('spin_id')
+                saved = data.get('saved')
+                details = f"Spin ID: {spin_id[:8]}..., Saved: {saved}"
+            else:
+                try:
+                    error_data = response.json()
+                    details = f"Status: {response.status_code}, Error: {error_data.get('detail', 'Unknown error')}"
+                except:
+                    details = f"Status: {response.status_code}, Response: {response.text[:100]}..."
+                
+            self.log_test("Save Spin Result", success, details)
+            return success
+            
+        except Exception as e:
+            self.log_test("Save Spin Result", False, str(e))
+            return False
+
+    def test_get_spin_result(self):
+        """Test get spin result endpoint"""
+        if not self.sample_spin_id:
+            self.log_test("Get Spin Result", False, "No sample spin ID available")
+            return False
+            
+        try:
+            response = requests.get(f"{self.base_url}/api/spin/{self.sample_spin_id}", timeout=10)
+            success = response.status_code == 200
+            
+            if success:
+                data = response.json()
+                spin_id = data.get('spin_id')
+                selected_movie = data.get('selected_movie', {})
+                movie_title = selected_movie.get('title', 'Unknown')
+                details = f"Spin ID: {spin_id[:8]}..., Movie: {movie_title}"
+            else:
+                details = f"Status code: {response.status_code}"
+                
+            self.log_test("Get Spin Result", success, details)
+            return success
+            
+        except Exception as e:
+            self.log_test("Get Spin Result", False, str(e))
+            return False
+
+    def test_get_statistics(self):
+        """Test get statistics endpoint"""
+        try:
+            response = requests.get(f"{self.base_url}/api/stats", timeout=10)
+            success = response.status_code == 200
+            
+            if success:
+                data = response.json()
+                total_movies = data.get('total_movies', 0)
+                total_spins = data.get('total_spins', 0)
+                popular_genres = data.get('popular_genres', [])
+                details = f"Movies: {total_movies}, Spins: {total_spins}, Top genres: {len(popular_genres)}"
+            else:
+                details = f"Status code: {response.status_code}"
+                
+            self.log_test("Get Statistics", success, details)
+            return success
+            
+        except Exception as e:
+            self.log_test("Get Statistics", False, str(e))
+            return False
+
+    def test_error_handling(self):
+        """Test error handling with invalid inputs"""
+        try:
+            # Test invalid movie ID
+            response = requests.get(f"{self.base_url}/api/movies/invalid_id_999", timeout=10)
+            success = response.status_code == 404
+            details = f"Invalid movie ID handled with status: {response.status_code}"
+            
+            self.log_test("Error Handling (Invalid Movie ID)", success, details)
+            
+            # Test invalid spin ID
+            response2 = requests.get(f"{self.base_url}/api/spin/invalid_spin_id", timeout=10)
+            success2 = response2.status_code == 404
+            details2 = f"Invalid spin ID handled with status: {response2.status_code}"
+            
+            self.log_test("Error Handling (Invalid Spin ID)", success2, details2)
+            return success and success2
+            
+        except Exception as e:
+            self.log_test("Error Handling", False, str(e))
             return False
 
     def run_all_tests(self):
         """Run all API tests"""
-        print("🚀 Starting AI Email Reply Assistant API Tests")
+        print("🎬 Starting StreamRoulette API Tests")
         print(f"📍 Testing against: {self.base_url}")
         print("=" * 60)
         
         # Basic endpoint tests
         self.test_health_check()
-        self.test_get_email_types()
-        self.test_get_tones()
+        self.test_get_genres()
+        self.test_get_moods()
+        self.test_get_statistics()
         
         # Core functionality tests
-        self.test_generate_multiple_replies()
-        self.test_generate_single_reply()
-        self.test_get_session()
+        self.test_get_random_movies()
+        self.test_get_movie_details()
+        self.test_filter_movies()
+        
+        # Spin functionality tests
+        self.test_save_spin_result()
+        self.test_get_spin_result()
         
         # Error handling tests
         self.test_error_handling()
@@ -281,7 +364,7 @@ Director of Marketing, Innovation Inc."""
 
 def main():
     """Main test runner"""
-    tester = EmailReplyAPITester()
+    tester = StreamRouletteAPITester()
     return tester.run_all_tests()
 
 if __name__ == "__main__":
