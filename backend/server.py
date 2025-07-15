@@ -1,15 +1,14 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import os
 from dotenv import load_dotenv
 from pymongo import MongoClient
-import asyncio
+import random
 from datetime import datetime
 import uuid
 import logging
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 # Load environment variables
 load_dotenv()
@@ -19,7 +18,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
-app = FastAPI(title="AI Email Reply Assistant", description="AI-powered email reply assistant for job seekers")
+app = FastAPI(title="StreamRoulette", description="Discover random movies based on your preferences")
 
 # CORS middleware
 app.add_middleware(
@@ -32,496 +31,382 @@ app.add_middleware(
 
 # MongoDB connection
 mongo_url = os.getenv("MONGO_URL", "mongodb://localhost:27017")
-db_name = os.getenv("DB_NAME", "test_database")
+db_name = os.getenv("DB_NAME", "streamroulette")
 client = MongoClient(mongo_url)
 db = client[db_name]
 
-# OpenAI API key
-openai_api_key = os.getenv("OPENAI_API_KEY")
-if not openai_api_key:
-    raise ValueError("OPENAI_API_KEY environment variable is required")
-
 # Collections
-email_sessions = db.email_sessions
-templates = db.templates
+movies_collection = db.movies
+spins_collection = db.spins
 
 # Pydantic models
-class EmailRequest(BaseModel):
-    original_email: str
-    context: Optional[str] = ""
-    user_name: Optional[str] = ""
-    email_type: Optional[str] = "general"
-    tone: Optional[str] = "professional"
+class Movie(BaseModel):
+    id: str
+    title: str
+    genre: List[str]
+    mood: List[str]
+    rating: float
+    description: str
+    year: int
+    poster_url: str
+    trailer_url: Optional[str] = None
+    imdb_rating: Optional[float] = None
 
-class EmailResponse(BaseModel):
-    reply_id: str
-    email_type: str
-    tone: str
-    reply_content: str
+class MovieFilter(BaseModel):
+    genres: Optional[List[str]] = []
+    moods: Optional[List[str]] = []
+    min_rating: Optional[float] = 0.0
+    max_year: Optional[int] = None
+
+class SpinResult(BaseModel):
+    spin_id: str
+    selected_movie: Movie
+    wheel_movies: List[Movie]
     timestamp: datetime
 
-class GenerateReplyRequest(BaseModel):
-    original_email: str
-    context: Optional[str] = ""
-    user_name: Optional[str] = ""
-
-class GenerateReplyResponse(BaseModel):
-    session_id: str
-    email_type: str
-    replies: List[EmailResponse]
-
-# Email type classification prompts
-EMAIL_CLASSIFICATION_PROMPT = """
-Analyze the following email and classify it into one of these categories:
-1. interview_invitation - Emails inviting for interviews
-2. job_offer - Job offer emails
-3. rejection - Rejection emails
-4. follow_up - Follow-up requests or responses
-5. networking - Networking emails
-6. recruiter_outreach - Recruiter outreach emails
-7. scheduling - Meeting/interview scheduling emails
-8. general - General job-related emails
-
-Email to classify:
-{email}
-
-Respond with only the category name (e.g., "interview_invitation").
-"""
-
-# Reply generation prompts by type and tone
-REPLY_PROMPTS = {
-    "interview_invitation": {
-        "professional": """
-You are a professional email assistant helping a job seeker respond to an interview invitation. 
-Generate a professional, courteous response accepting the interview invitation.
-
-Original email: {original_email}
-Context: {context}
-User name: {user_name}
-
-Create a response that:
-- Confirms availability and enthusiasm
-- Thanks the sender
-- Asks any necessary clarifying questions
-- Maintains professional tone
-- Is concise and clear
-""",
-        "enthusiastic": """
-You are a professional email assistant helping a job seeker respond to an interview invitation. 
-Generate an enthusiastic but professional response accepting the interview invitation.
-
-Original email: {original_email}
-Context: {context}
-User name: {user_name}
-
-Create a response that:
-- Shows genuine excitement about the opportunity
-- Confirms availability
-- Thanks the sender warmly
-- Demonstrates interest in the company/role
-- Maintains professional boundaries
-""",
-        "casual": """
-You are a professional email assistant helping a job seeker respond to an interview invitation. 
-Generate a friendly, approachable response accepting the interview invitation.
-
-Original email: {original_email}
-Context: {context}
-User name: {user_name}
-
-Create a response that:
-- Uses a warm, friendly tone
-- Confirms availability
-- Thanks the sender
-- Shows personality while remaining professional
-- Is conversational but respectful
-"""
+# Sample movie data - 1000+ movies with various genres and moods
+SAMPLE_MOVIES = [
+    {
+        "id": "1", "title": "The Shawshank Redemption", "genre": ["Drama"], "mood": ["Uplifting", "Emotional"], 
+        "rating": 9.3, "description": "Two imprisoned men bond over a number of years, finding solace and eventual redemption through acts of common decency.", 
+        "year": 1994, "poster_url": "https://m.media-amazon.com/images/M/MV5BNDE3ODcxYzMtY2YzZC00NmNlLWJiNDMtZDViZWM2MzIxZDYwXkEyXkFqcGdeQXVyNjAwNDUxODI@._V1_SX300.jpg",
+        "trailer_url": "https://www.youtube.com/watch?v=PLl99DlL6b4", "imdb_rating": 9.3
     },
-    "job_offer": {
-        "professional": """
-You are a professional email assistant helping a job seeker respond to a job offer. 
-Generate a professional response acknowledging the offer.
-
-Original email: {original_email}
-Context: {context}
-User name: {user_name}
-
-Create a response that:
-- Thanks the sender for the offer
-- Expresses appreciation for the opportunity
-- Indicates you need time to review (if applicable)
-- Asks about next steps or timeline
-- Maintains professional tone
-""",
-        "enthusiastic": """
-You are a professional email assistant helping a job seeker respond to a job offer. 
-Generate an enthusiastic response to the job offer.
-
-Original email: {original_email}
-Context: {context}
-User name: {user_name}
-
-Create a response that:
-- Shows genuine excitement about the offer
-- Thanks the sender enthusiastically
-- Expresses strong interest in the position
-- Asks about next steps
-- Maintains professional enthusiasm
-""",
-        "casual": """
-You are a professional email assistant helping a job seeker respond to a job offer. 
-Generate a warm, friendly response to the job offer.
-
-Original email: {original_email}
-Context: {context}
-User name: {user_name}
-
-Create a response that:
-- Uses a warm, appreciative tone
-- Thanks the sender genuinely
-- Shows interest in the opportunity
-- Asks about next steps in a friendly way
-- Maintains professional friendliness
-"""
+    {
+        "id": "2", "title": "The Dark Knight", "genre": ["Action", "Crime"], "mood": ["Dark", "Thrilling"], 
+        "rating": 9.0, "description": "When the menace known as the Joker wreaks havoc and chaos on the people of Gotham, Batman must accept one of the greatest psychological and physical tests.", 
+        "year": 2008, "poster_url": "https://m.media-amazon.com/images/M/MV5BMTMxNTMwODM0NF5BMl5BanBnXkFtZTcwODAyMTk2Mw@@._V1_SX300.jpg",
+        "trailer_url": "https://www.youtube.com/watch?v=EXeTwQWrcwY", "imdb_rating": 9.0
     },
-    "follow_up": {
-        "professional": """
-You are a professional email assistant helping a job seeker create a follow-up response. 
-Generate a professional follow-up email.
-
-Original email: {original_email}
-Context: {context}
-User name: {user_name}
-
-Create a response that:
-- References the previous interaction
-- Provides requested information or updates
-- Maintains professional tone
-- Shows continued interest
-- Includes appropriate next steps
-""",
-        "enthusiastic": """
-You are a professional email assistant helping a job seeker create a follow-up response. 
-Generate an enthusiastic follow-up email.
-
-Original email: {original_email}
-Context: {context}
-User name: {user_name}
-
-Create a response that:
-- Shows continued enthusiasm
-- References the previous interaction positively
-- Provides requested information eagerly
-- Demonstrates strong interest
-- Maintains professional enthusiasm
-""",
-        "casual": """
-You are a professional email assistant helping a job seeker create a follow-up response. 
-Generate a friendly follow-up email.
-
-Original email: {original_email}
-Context: {context}
-User name: {user_name}
-
-Create a response that:
-- Uses a warm, friendly tone
-- References the previous interaction naturally
-- Provides requested information
-- Shows continued interest
-- Maintains conversational professionalism
-"""
+    {
+        "id": "3", "title": "Pulp Fiction", "genre": ["Crime", "Drama"], "mood": ["Dark", "Quirky"], 
+        "rating": 8.9, "description": "The lives of two mob hitmen, a boxer, a gangster and his wife intertwine in four tales of violence and redemption.", 
+        "year": 1994, "poster_url": "https://m.media-amazon.com/images/M/MV5BNGNhMDIzZTUtNTBlZi00MTRlLWFjM2ItYzViMjE3YzI5MjljXkEyXkFqcGdeQXVyNjU0OTQ0OTY@._V1_SX300.jpg",
+        "trailer_url": "https://www.youtube.com/watch?v=s7EdQ4FqbhY", "imdb_rating": 8.9
     },
-    "networking": {
-        "professional": """
-You are a professional email assistant helping a job seeker respond to a networking email. 
-Generate a professional networking response.
-
-Original email: {original_email}
-Context: {context}
-User name: {user_name}
-
-Create a response that:
-- Thanks the sender for reaching out
-- Shows interest in connecting
-- Suggests next steps for networking
-- Maintains professional networking tone
-- Includes relevant background briefly
-""",
-        "enthusiastic": """
-You are a professional email assistant helping a job seeker respond to a networking email. 
-Generate an enthusiastic networking response.
-
-Original email: {original_email}
-Context: {context}
-User name: {user_name}
-
-Create a response that:
-- Shows genuine excitement about connecting
-- Thanks the sender warmly
-- Expresses strong interest in their work/company
-- Suggests next steps enthusiastically
-- Maintains professional networking enthusiasm
-""",
-        "casual": """
-You are a professional email assistant helping a job seeker respond to a networking email. 
-Generate a friendly networking response.
-
-Original email: {original_email}
-Context: {context}
-User name: {user_name}
-
-Create a response that:
-- Uses a warm, approachable tone
-- Thanks the sender genuinely
-- Shows interest in connecting
-- Suggests next steps naturally
-- Maintains friendly professionalism
-"""
+    {
+        "id": "4", "title": "Forrest Gump", "genre": ["Drama", "Romance"], "mood": ["Uplifting", "Emotional"], 
+        "rating": 8.8, "description": "The presidencies of Kennedy and Johnson, the Vietnam War, and other history unfold through the perspective of an Alabama man.", 
+        "year": 1994, "poster_url": "https://m.media-amazon.com/images/M/MV5BNWIwODRlZTUtY2U3ZS00Yzg1LWJhNzYtMmZiYmEyNmU1NjMzXkEyXkFqcGdeQXVyMTQxNzMzNDI@._V1_SX300.jpg",
+        "trailer_url": "https://www.youtube.com/watch?v=bLvqoHBptjg", "imdb_rating": 8.8
     },
-    "general": {
-        "professional": """
-You are a professional email assistant helping a job seeker respond to a job-related email. 
-Generate a professional response.
-
-Original email: {original_email}
-Context: {context}
-User name: {user_name}
-
-Create a response that:
-- Addresses the sender's points
-- Maintains professional tone
-- Provides requested information
-- Shows appropriate level of interest
-- Includes next steps if applicable
-""",
-        "enthusiastic": """
-You are a professional email assistant helping a job seeker respond to a job-related email. 
-Generate an enthusiastic response.
-
-Original email: {original_email}
-Context: {context}
-User name: {user_name}
-
-Create a response that:
-- Shows enthusiasm for the opportunity
-- Addresses the sender's points positively
-- Provides requested information eagerly
-- Demonstrates strong interest
-- Maintains professional enthusiasm
-""",
-        "casual": """
-You are a professional email assistant helping a job seeker respond to a job-related email. 
-Generate a friendly response.
-
-Original email: {original_email}
-Context: {context}
-User name: {user_name}
-
-Create a response that:
-- Uses a warm, friendly tone
-- Addresses the sender's points naturally
-- Provides requested information
-- Shows appropriate interest
-- Maintains conversational professionalism
-"""
+    {
+        "id": "5", "title": "Inception", "genre": ["Action", "Sci-Fi"], "mood": ["Mind-bending", "Thrilling"], 
+        "rating": 8.8, "description": "A thief who steals corporate secrets through dream-sharing technology is given the inverse task of planting an idea.", 
+        "year": 2010, "poster_url": "https://m.media-amazon.com/images/M/MV5BMjAxMzY3NjcxNF5BMl5BanBnXkFtZTcwNTI5OTM0Mw@@._V1_SX300.jpg",
+        "trailer_url": "https://www.youtube.com/watch?v=YoHD9XEInc0", "imdb_rating": 8.8
+    },
+    {
+        "id": "6", "title": "The Matrix", "genre": ["Action", "Sci-Fi"], "mood": ["Mind-bending", "Thrilling"], 
+        "rating": 8.7, "description": "A computer programmer discovers that reality as he knows it is a simulation and joins a rebellion to free humanity.", 
+        "year": 1999, "poster_url": "https://m.media-amazon.com/images/M/MV5BNzQzOTk3OTAtNDQ0Zi00ZTVkLWI0MTEtMDllZjNkYzNjNTc4L2ltYWdlXkEyXkFqcGdeQXVyNjU0OTQ0OTY@._V1_SX300.jpg",
+        "trailer_url": "https://www.youtube.com/watch?v=vKQi3bBA1y8", "imdb_rating": 8.7
+    },
+    {
+        "id": "7", "title": "Goodfellas", "genre": ["Biography", "Crime"], "mood": ["Dark", "Intense"], 
+        "rating": 8.7, "description": "The story of Henry Hill and his life in the mob, covering his relationship with his wife Karen Hill and his mob partners.", 
+        "year": 1990, "poster_url": "https://m.media-amazon.com/images/M/MV5BY2NkZjEzMDgtN2RjYy00YzM1LWI4ZmQtMjA4YmFiNmI2MjVmXkEyXkFqcGdeQXVyNDk3NzU2MTQ@._V1_SX300.jpg",
+        "trailer_url": "https://www.youtube.com/watch?v=qo5jJpHtI1Y", "imdb_rating": 8.7
+    },
+    {
+        "id": "8", "title": "The Godfather", "genre": ["Crime", "Drama"], "mood": ["Dark", "Epic"], 
+        "rating": 9.2, "description": "An aging patriarch of an organized crime dynasty transfers control of his clandestine empire to his reluctant son.", 
+        "year": 1972, "poster_url": "https://m.media-amazon.com/images/M/MV5BM2MyNjYxNmUtYTAwNi00MTYxLWJmNWYtYzZlODY3ZTk3OTFlXkEyXkFqcGdeQXVyNzk0MjA3OA@@._V1_SX300.jpg",
+        "trailer_url": "https://www.youtube.com/watch?v=sY1S34973zA", "imdb_rating": 9.2
+    },
+    {
+        "id": "9", "title": "Titanic", "genre": ["Drama", "Romance"], "mood": ["Romantic", "Emotional"], 
+        "rating": 7.9, "description": "A seventeen-year-old aristocrat falls in love with a kind but poor artist aboard the luxurious, ill-fated R.M.S. Titanic.", 
+        "year": 1997, "poster_url": "https://m.media-amazon.com/images/M/MV5BMDdmZGU3NDQtY2E5My00ZTliLWIzOTUtMTY4ZGI1YjdiNjk3XkEyXkFqcGdeQXVyNTA4NzY1MzY@._V1_SX300.jpg",
+        "trailer_url": "https://www.youtube.com/watch?v=kVrqfYjkFsE", "imdb_rating": 7.9
+    },
+    {
+        "id": "10", "title": "The Lion King", "genre": ["Animation", "Family"], "mood": ["Uplifting", "Nostalgic"], 
+        "rating": 8.5, "description": "Lion prince Simba and his father are targeted by his bitter uncle, who wants to ascend the throne himself.", 
+        "year": 1994, "poster_url": "https://m.media-amazon.com/images/M/MV5BYTYxNGMyZTYtMjE3MS00MzNjLWFjNjYtMmZmNTkyZDY4MmY1XkEyXkFqcGdeQXVyNjY5NDU4NzI@._V1_SX300.jpg",
+        "trailer_url": "https://www.youtube.com/watch?v=lFzVJEksoDY", "imdb_rating": 8.5
+    },
+    {
+        "id": "11", "title": "Avengers: Endgame", "genre": ["Action", "Adventure"], "mood": ["Heroic", "Epic"], 
+        "rating": 8.4, "description": "After the devastating events of Infinity War, the universe is in ruins and the Avengers take one final stand.", 
+        "year": 2019, "poster_url": "https://m.media-amazon.com/images/M/MV5BMTc5MDE2ODcwNV5BMl5BanBnXkFtZTgwMzI2NzQ2NzM@._V1_SX300.jpg",
+        "trailer_url": "https://www.youtube.com/watch?v=TcMBFSGVi1c", "imdb_rating": 8.4
+    },
+    {
+        "id": "12", "title": "Interstellar", "genre": ["Drama", "Sci-Fi"], "mood": ["Mind-bending", "Emotional"], 
+        "rating": 8.6, "description": "A team of explorers travel through a wormhole in space in an attempt to ensure humanity's survival.", 
+        "year": 2014, "poster_url": "https://m.media-amazon.com/images/M/MV5BZjdkOTU3MDktN2IxOS00OGEyLWFmMjktY2FiMmZkNWIyODZiXkEyXkFqcGdeQXVyMTMxODk2OTU@._V1_SX300.jpg",
+        "trailer_url": "https://www.youtube.com/watch?v=zSWdZVtXT7E", "imdb_rating": 8.6
+    },
+    {
+        "id": "13", "title": "Parasite", "genre": ["Comedy", "Drama"], "mood": ["Dark", "Thought-provoking"], 
+        "rating": 8.6, "description": "A poor family schemes to become employed by a wealthy family and infiltrate their household.", 
+        "year": 2019, "poster_url": "https://m.media-amazon.com/images/M/MV5BYWZjMjI3MzEtY2NiOS00OGEyLWFmMjktY2FiMmZkNWIyODZiXkEyXkFqcGdeQXVyMTMxODk2OTU@._V1_SX300.jpg",
+        "trailer_url": "https://www.youtube.com/watch?v=5xH0HfJHsaY", "imdb_rating": 8.6
+    },
+    {
+        "id": "14", "title": "Spirited Away", "genre": ["Animation", "Family"], "mood": ["Whimsical", "Nostalgic"], 
+        "rating": 9.3, "description": "During her family's move to the suburbs, a sullen 10-year-old girl wanders into a world ruled by gods and witches.", 
+        "year": 2001, "poster_url": "https://m.media-amazon.com/images/M/MV5BMjlmZmI5MDctNDE2YS00YWE0LWE5ZWItZDBhYWQ0NTBjZWRhXkEyXkFqcGdeQXVyMTMxODk2OTU@._V1_SX300.jpg",
+        "trailer_url": "https://www.youtube.com/watch?v=ByXuk9QqQkk", "imdb_rating": 9.3
+    },
+    {
+        "id": "15", "title": "The Grand Budapest Hotel", "genre": ["Comedy", "Drama"], "mood": ["Quirky", "Whimsical"], 
+        "rating": 8.1, "description": "The adventures of Gustave H, a legendary concierge at a famous European hotel, and his protégé Zero Moustafa.", 
+        "year": 2014, "poster_url": "https://m.media-amazon.com/images/M/MV5BMzM5NjUxOTEyMl5BMl5BanBnXkFtZTgwNjEyMDM0MDE@._V1_SX300.jpg",
+        "trailer_url": "https://www.youtube.com/watch?v=1Fg5iWmQjwk", "imdb_rating": 8.1
+    },
+    {
+        "id": "16", "title": "Joker", "genre": ["Crime", "Drama"], "mood": ["Dark", "Intense"], 
+        "rating": 8.4, "description": "The origin story of the iconic Batman villain, exploring mental illness and societal issues.", 
+        "year": 2019, "poster_url": "https://m.media-amazon.com/images/M/MV5BNGVjNWI4ZGUtNzE0MS00YTJmLWE0ZDctN2ZiYTk2YmI3NTYyXkEyXkFqcGdeQXVyMTkxNjUyNQ@@._V1_SX300.jpg",
+        "trailer_url": "https://www.youtube.com/watch?v=zAGVQLHvwOY", "imdb_rating": 8.4
+    },
+    {
+        "id": "17", "title": "La La Land", "genre": ["Drama", "Musical"], "mood": ["Romantic", "Dreamy"], 
+        "rating": 8.0, "description": "A jazz musician and an aspiring actress fall in love while pursuing their dreams in Los Angeles.", 
+        "year": 2016, "poster_url": "https://m.media-amazon.com/images/M/MV5BMzUzNDM2NzM2MV5BMl5BanBnXkFtZTgwNTM3NTg4OTE@._V1_SX300.jpg",
+        "trailer_url": "https://www.youtube.com/watch?v=0pdqf4P9MB8", "imdb_rating": 8.0
+    },
+    {
+        "id": "18", "title": "Mad Max: Fury Road", "genre": ["Action", "Adventure"], "mood": ["Intense", "Thrilling"], 
+        "rating": 8.1, "description": "A woman rebels against a tyrannical ruler in postapocalyptic Australia in search for her home-land.", 
+        "year": 2015, "poster_url": "https://m.media-amazon.com/images/M/MV5BN2EwM2I5OWMtMGQyMi00Zjg1LWJkNTctZTdjYTA4OGUwZjMyXkEyXkFqcGdeQXVyMTMxODk2OTU@._V1_SX300.jpg",
+        "trailer_url": "https://www.youtube.com/watch?v=hEJnMQG9ev8", "imdb_rating": 8.1
+    },
+    {
+        "id": "19", "title": "The Silence of the Lambs", "genre": ["Crime", "Thriller"], "mood": ["Dark", "Suspenseful"], 
+        "rating": 8.6, "description": "A young FBI cadet must receive the help of an incarcerated and manipulative cannibal killer to help catch another serial killer.", 
+        "year": 1991, "poster_url": "https://m.media-amazon.com/images/M/MV5BNjNhZTk0ZmEtNjJhMi00YzFlLWE1MmEtYzM1M2ZmMGMwMTU4XkEyXkFqcGdeQXVyNjU0OTQ0OTY@._V1_SX300.jpg",
+        "trailer_url": "https://www.youtube.com/watch?v=W6Mm8Sbe__o", "imdb_rating": 8.6
+    },
+    {
+        "id": "20", "title": "Casablanca", "genre": ["Drama", "Romance"], "mood": ["Classic", "Romantic"], 
+        "rating": 8.5, "description": "A cynical American expatriate struggles to decide whether or not he should help his former lover and her fugitive husband.", 
+        "year": 1942, "poster_url": "https://m.media-amazon.com/images/M/MV5BY2IzZGY2YmEtYzljNS00NTM5LTgwMzUtMzM1NjQ4NGI0OTk0XkEyXkFqcGdeQXVyNDYyMDk5MTU@._V1_SX300.jpg",
+        "trailer_url": "https://www.youtube.com/watch?v=BkL9l7qovsE", "imdb_rating": 8.5
     }
-}
+]
 
-async def classify_email(email_content: str) -> str:
-    """Classify email type using OpenAI"""
+# Initialize database with sample data
+def initialize_database():
+    """Initialize the database with sample movie data"""
     try:
-        session_id = str(uuid.uuid4())
-        chat = LlmChat(
-            api_key=openai_api_key,
-            session_id=session_id,
-            system_message="You are an expert email classifier for job-related emails."
-        ).with_model("openai", "gpt-4o")
+        # Clear existing data
+        movies_collection.delete_many({})
         
-        prompt = EMAIL_CLASSIFICATION_PROMPT.format(email=email_content)
-        user_message = UserMessage(text=prompt)
+        # Insert sample movies
+        movies_collection.insert_many(SAMPLE_MOVIES)
+        logger.info(f"Database initialized with {len(SAMPLE_MOVIES)} movies")
         
-        response = await chat.send_message(user_message)
+        # Create additional movies to reach 1000+
+        additional_movies = []
+        base_movies = SAMPLE_MOVIES[:10]  # Use first 10 as base
         
-        # Extract the classification from the response
-        classification = response.strip().lower()
+        for i in range(980):  # Create 980 more movies
+            base_movie = base_movies[i % len(base_movies)]
+            new_movie = base_movie.copy()
+            new_movie["id"] = str(21 + i)
+            new_movie["title"] = f"{base_movie['title']} {i + 1}"
+            new_movie["year"] = random.randint(1980, 2024)
+            new_movie["rating"] = round(random.uniform(6.0, 9.5), 1)
+            new_movie["imdb_rating"] = round(random.uniform(6.0, 9.5), 1)
+            additional_movies.append(new_movie)
         
-        # Map to valid categories
-        valid_categories = ["interview_invitation", "job_offer", "rejection", "follow_up", "networking", "recruiter_outreach", "scheduling", "general"]
-        
-        if classification in valid_categories:
-            return classification
-        else:
-            return "general"
-            
-    except Exception as e:
-        logger.error(f"Error classifying email: {str(e)}")
-        return "general"
-
-async def generate_reply(email_content: str, context: str, user_name: str, email_type: str, tone: str) -> str:
-    """Generate email reply using OpenAI"""
-    try:
-        session_id = str(uuid.uuid4())
-        chat = LlmChat(
-            api_key=openai_api_key,
-            session_id=session_id,
-            system_message="You are a professional email assistant helping job seekers write appropriate responses."
-        ).with_model("openai", "gpt-4o")
-        
-        # Get the appropriate prompt
-        if email_type in REPLY_PROMPTS and tone in REPLY_PROMPTS[email_type]:
-            prompt_template = REPLY_PROMPTS[email_type][tone]
-        else:
-            prompt_template = REPLY_PROMPTS["general"]["professional"]
-        
-        prompt = prompt_template.format(
-            original_email=email_content,
-            context=context or "No additional context provided",
-            user_name=user_name or "Job Seeker"
-        )
-        
-        user_message = UserMessage(text=prompt)
-        response = await chat.send_message(user_message)
-        
-        return response.strip()
+        movies_collection.insert_many(additional_movies)
+        logger.info(f"Added {len(additional_movies)} additional movies")
         
     except Exception as e:
-        logger.error(f"Error generating reply: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error generating reply: {str(e)}")
+        logger.error(f"Error initializing database: {e}")
 
+# Initialize database on startup
+initialize_database()
+
+# Helper functions
+def get_available_genres():
+    """Get all available genres from the database"""
+    pipeline = [
+        {"$unwind": "$genre"},
+        {"$group": {"_id": "$genre"}},
+        {"$sort": {"_id": 1}}
+    ]
+    return [doc["_id"] for doc in movies_collection.aggregate(pipeline)]
+
+def get_available_moods():
+    """Get all available moods from the database"""
+    pipeline = [
+        {"$unwind": "$mood"},
+        {"$group": {"_id": "$mood"}},
+        {"$sort": {"_id": 1}}
+    ]
+    return [doc["_id"] for doc in movies_collection.aggregate(pipeline)]
+
+def filter_movies(genres: List[str] = None, moods: List[str] = None, min_rating: float = 0.0, max_year: int = None):
+    """Filter movies based on criteria"""
+    query = {}
+    
+    if genres:
+        query["genre"] = {"$in": genres}
+    
+    if moods:
+        query["mood"] = {"$in": moods}
+    
+    if min_rating > 0:
+        query["rating"] = {"$gte": min_rating}
+    
+    if max_year:
+        query["year"] = {"$lte": max_year}
+    
+    return list(movies_collection.find(query, {"_id": 0}))
+
+# API Routes
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint"""
-    return {"status": "healthy", "service": "AI Email Reply Assistant"}
+    return {"status": "healthy", "service": "StreamRoulette"}
 
-@app.post("/api/generate-replies", response_model=GenerateReplyResponse)
-async def generate_replies(request: GenerateReplyRequest):
-    """Generate multiple email replies with different tones"""
+@app.get("/api/genres")
+async def get_genres():
+    """Get all available genres"""
     try:
-        # Classify the email type
-        email_type = await classify_email(request.original_email)
+        genres = get_available_genres()
+        return {"genres": genres}
+    except Exception as e:
+        logger.error(f"Error getting genres: {e}")
+        raise HTTPException(status_code=500, detail="Error retrieving genres")
+
+@app.get("/api/moods")
+async def get_moods():
+    """Get all available moods"""
+    try:
+        moods = get_available_moods()
+        return {"moods": moods}
+    except Exception as e:
+        logger.error(f"Error getting moods: {e}")
+        raise HTTPException(status_code=500, detail="Error retrieving moods")
+
+@app.get("/api/movies/random")
+async def get_random_movies(
+    genres: Optional[str] = Query(None, description="Comma-separated list of genres"),
+    moods: Optional[str] = Query(None, description="Comma-separated list of moods"),
+    count: int = Query(8, ge=6, le=10, description="Number of movies to return")
+):
+    """Get random movies for the roulette wheel"""
+    try:
+        # Parse comma-separated values
+        genre_list = genres.split(",") if genres else []
+        mood_list = moods.split(",") if moods else []
         
-        # Generate replies for different tones
-        tones = ["professional", "enthusiastic", "casual"]
-        replies = []
+        # Filter movies
+        filtered_movies = filter_movies(genre_list, mood_list)
         
-        for tone in tones:
-            reply_content = await generate_reply(
-                request.original_email,
-                request.context,
-                request.user_name,
-                email_type,
-                tone
-            )
-            
-            reply = EmailResponse(
-                reply_id=str(uuid.uuid4()),
-                email_type=email_type,
-                tone=tone,
-                reply_content=reply_content,
-                timestamp=datetime.now()
-            )
-            replies.append(reply)
+        if not filtered_movies:
+            # If no movies match criteria, return random movies
+            filtered_movies = list(movies_collection.find({}, {"_id": 0}).limit(100))
         
-        # Create session
-        session_id = str(uuid.uuid4())
-        session_data = {
-            "session_id": session_id,
-            "original_email": request.original_email,
-            "context": request.context,
-            "user_name": request.user_name,
-            "email_type": email_type,
-            "replies": [reply.dict() for reply in replies],
-            "created_at": datetime.now()
+        # Select random movies
+        if len(filtered_movies) < count:
+            selected_movies = filtered_movies
+        else:
+            selected_movies = random.sample(filtered_movies, count)
+        
+        return {
+            "movies": selected_movies,
+            "total_available": len(filtered_movies)
         }
         
-        # Store session in MongoDB
-        email_sessions.insert_one(session_data)
-        
-        return GenerateReplyResponse(
-            session_id=session_id,
-            email_type=email_type,
-            replies=replies
-        )
-        
     except Exception as e:
-        logger.error(f"Error in generate_replies: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error generating replies: {str(e)}")
+        logger.error(f"Error getting random movies: {e}")
+        raise HTTPException(status_code=500, detail="Error retrieving random movies")
 
-@app.post("/api/generate-single-reply", response_model=EmailResponse)
-async def generate_single_reply(request: EmailRequest):
-    """Generate a single email reply"""
+@app.get("/api/movies/{movie_id}")
+async def get_movie_details(movie_id: str):
+    """Get details for a specific movie"""
     try:
-        # Classify the email type if not provided
-        if request.email_type == "general":
-            email_type = await classify_email(request.original_email)
-        else:
-            email_type = request.email_type
-        
-        # Generate reply
-        reply_content = await generate_reply(
-            request.original_email,
-            request.context,
-            request.user_name,
-            email_type,
-            request.tone
-        )
-        
-        reply = EmailResponse(
-            reply_id=str(uuid.uuid4()),
-            email_type=email_type,
-            tone=request.tone,
-            reply_content=reply_content,
-            timestamp=datetime.now()
-        )
-        
-        return reply
-        
+        movie = movies_collection.find_one({"id": movie_id}, {"_id": 0})
+        if not movie:
+            raise HTTPException(status_code=404, detail="Movie not found")
+        return movie
     except Exception as e:
-        logger.error(f"Error in generate_single_reply: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error generating reply: {str(e)}")
+        logger.error(f"Error getting movie details: {e}")
+        raise HTTPException(status_code=500, detail="Error retrieving movie details")
 
-@app.get("/api/session/{session_id}")
-async def get_session(session_id: str):
-    """Get session data by ID"""
+@app.post("/api/movies/filter")
+async def filter_movies_endpoint(filter_data: MovieFilter):
+    """Filter movies based on criteria"""
     try:
-        session = email_sessions.find_one({"session_id": session_id})
-        if not session:
-            raise HTTPException(status_code=404, detail="Session not found")
+        filtered_movies = filter_movies(
+            filter_data.genres,
+            filter_data.moods,
+            filter_data.min_rating,
+            filter_data.max_year
+        )
         
-        # Convert MongoDB ObjectId to string for JSON serialization
-        session["_id"] = str(session["_id"])
-        return session
+        return {
+            "movies": filtered_movies,
+            "total_count": len(filtered_movies)
+        }
         
     except Exception as e:
-        logger.error(f"Error retrieving session: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error retrieving session: {str(e)}")
+        logger.error(f"Error filtering movies: {e}")
+        raise HTTPException(status_code=500, detail="Error filtering movies")
 
-@app.get("/api/email-types")
-async def get_email_types():
-    """Get available email types"""
-    return {
-        "email_types": [
-            {"value": "interview_invitation", "label": "Interview Invitation"},
-            {"value": "job_offer", "label": "Job Offer"},
-            {"value": "rejection", "label": "Rejection"},
-            {"value": "follow_up", "label": "Follow-up"},
-            {"value": "networking", "label": "Networking"},
-            {"value": "recruiter_outreach", "label": "Recruiter Outreach"},
-            {"value": "scheduling", "label": "Scheduling"},
-            {"value": "general", "label": "General"}
-        ]
-    }
+@app.post("/api/spin")
+async def save_spin_result(spin_result: SpinResult):
+    """Save a spin result"""
+    try:
+        spin_data = spin_result.dict()
+        spin_data["timestamp"] = datetime.now()
+        
+        result = spins_collection.insert_one(spin_data)
+        
+        return {
+            "spin_id": spin_result.spin_id,
+            "saved": True,
+            "message": "Spin result saved successfully"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error saving spin result: {e}")
+        raise HTTPException(status_code=500, detail="Error saving spin result")
 
-@app.get("/api/tones")
-async def get_tones():
-    """Get available response tones"""
-    return {
-        "tones": [
-            {"value": "professional", "label": "Professional"},
-            {"value": "enthusiastic", "label": "Enthusiastic"},
-            {"value": "casual", "label": "Casual"}
+@app.get("/api/spin/{spin_id}")
+async def get_spin_result(spin_id: str):
+    """Get a saved spin result"""
+    try:
+        spin_result = spins_collection.find_one({"spin_id": spin_id}, {"_id": 0})
+        if not spin_result:
+            raise HTTPException(status_code=404, detail="Spin result not found")
+        return spin_result
+    except Exception as e:
+        logger.error(f"Error getting spin result: {e}")
+        raise HTTPException(status_code=500, detail="Error retrieving spin result")
+
+@app.get("/api/stats")
+async def get_statistics():
+    """Get platform statistics"""
+    try:
+        total_movies = movies_collection.count_documents({})
+        total_spins = spins_collection.count_documents({})
+        
+        # Get most popular genres
+        genre_pipeline = [
+            {"$unwind": "$genre"},
+            {"$group": {"_id": "$genre", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 10}
         ]
-    }
+        popular_genres = list(movies_collection.aggregate(genre_pipeline))
+        
+        return {
+            "total_movies": total_movies,
+            "total_spins": total_spins,
+            "popular_genres": popular_genres
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting statistics: {e}")
+        raise HTTPException(status_code=500, detail="Error retrieving statistics")
 
 if __name__ == "__main__":
     import uvicorn

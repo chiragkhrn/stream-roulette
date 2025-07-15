@@ -1,367 +1,338 @@
 import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Play, Share2, RotateCw, Star, Calendar, Film, Heart, Trophy, Sparkles } from 'lucide-react';
+import RouletteWheel from './components/RouletteWheel';
+import MovieCard from './components/MovieCard';
+import FilterPanel from './components/FilterPanel';
 import './App.css';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8001';
 
 function App() {
-  const [originalEmail, setOriginalEmail] = useState('');
-  const [context, setContext] = useState('');
-  const [userName, setUserName] = useState('');
-  const [replies, setReplies] = useState([]);
+  const [genres, setGenres] = useState([]);
+  const [moods, setMoods] = useState([]);
+  const [selectedGenres, setSelectedGenres] = useState([]);
+  const [selectedMoods, setSelectedMoods] = useState([]);
+  const [wheelMovies, setWheelMovies] = useState([]);
+  const [selectedMovie, setSelectedMovie] = useState(null);
+  const [isSpinning, setIsSpinning] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const [emailType, setEmailType] = useState('');
-  const [selectedTone, setSelectedTone] = useState('professional');
-  const [availableTones, setAvailableTones] = useState([]);
-  const [showSingleReply, setShowSingleReply] = useState(false);
-  const [copiedId, setCopiedId] = useState('');
-
-  // Sample emails for demonstration
-  const sampleEmails = [
-    {
-      type: 'Interview Invitation',
-      content: `Subject: Interview Invitation - Software Engineer Position
-
-Dear John,
-
-Thank you for your interest in the Software Engineer position at TechCorp. We were impressed with your application and would like to invite you for an interview.
-
-We have availability for next Tuesday, March 12th at 2:00 PM or Wednesday, March 13th at 10:00 AM. The interview will be conducted via video call and should take approximately 45 minutes.
-
-Please let me know which time works best for you.
-
-Best regards,
-Sarah Johnson
-HR Manager, TechCorp`
-    },
-    {
-      type: 'Job Offer',
-      content: `Subject: Job Offer - Marketing Manager Position
-
-Dear Jane,
-
-We are pleased to offer you the position of Marketing Manager at Innovation Inc. After careful consideration, we believe you would be a great fit for our team.
-
-The position comes with a competitive salary of $85,000 per year, full benefits package, and opportunities for professional development.
-
-Please review the attached offer letter and let us know if you would like to accept this position. We would like to have your response by Friday, March 15th.
-
-Congratulations, and we look forward to hearing from you soon!
-
-Best regards,
-Mike Thompson
-Director of Marketing, Innovation Inc.`
-    },
-    {
-      type: 'Recruiter Outreach',
-      content: `Subject: Exciting Opportunity - Senior Developer Role
-
-Hi Alex,
-
-I hope this message finds you well. I came across your profile and was impressed by your experience in full-stack development.
-
-I'm currently working with a fast-growing startup that's looking for a Senior Developer to join their team. The role offers competitive compensation, equity, and the opportunity to work on cutting-edge projects.
-
-Would you be interested in learning more about this opportunity? I'd love to schedule a brief call to discuss the details.
-
-Best regards,
-Lisa Chen
-Technical Recruiter, TalentFirst`
-    }
-  ];
+  const [showResult, setShowResult] = useState(false);
+  const [spinCount, setSpinCount] = useState(0);
+  const [stats, setStats] = useState({});
 
   useEffect(() => {
-    fetchTones();
+    loadInitialData();
+    loadStats();
+    loadLastResult();
   }, []);
 
-  const fetchTones = async () => {
+  const loadInitialData = async () => {
     try {
-      const response = await fetch(`${BACKEND_URL}/api/tones`);
-      const data = await response.json();
-      setAvailableTones(data.tones);
+      const [genresRes, moodsRes] = await Promise.all([
+        fetch(`${BACKEND_URL}/api/genres`),
+        fetch(`${BACKEND_URL}/api/moods`)
+      ]);
+      
+      const genresData = await genresRes.json();
+      const moodsData = await moodsRes.json();
+      
+      setGenres(genresData.genres);
+      setMoods(moodsData.moods);
     } catch (err) {
-      console.error('Error fetching tones:', err);
+      setError('Failed to load initial data');
     }
   };
 
-  const handleGenerateReplies = async () => {
-    if (!originalEmail.trim()) {
-      setError('Please enter an email to generate replies');
-      return;
+  const loadStats = async () => {
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/stats`);
+      const data = await response.json();
+      setStats(data);
+    } catch (err) {
+      console.error('Failed to load stats:', err);
     }
+  };
 
+  const loadLastResult = () => {
+    const saved = localStorage.getItem('streamroulette_last_result');
+    if (saved) {
+      try {
+        const result = JSON.parse(saved);
+        setSelectedMovie(result.selectedMovie);
+        setWheelMovies(result.wheelMovies);
+        setShowResult(true);
+      } catch (err) {
+        localStorage.removeItem('streamroulette_last_result');
+      }
+    }
+  };
+
+  const handleSpin = async () => {
+    if (isSpinning || isLoading) return;
+    
     setIsLoading(true);
     setError('');
-    setReplies([]);
-
+    setShowResult(false);
+    setSelectedMovie(null);
+    
     try {
-      const response = await fetch(`${BACKEND_URL}/api/generate-replies`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          original_email: originalEmail,
-          context: context,
-          user_name: userName
-        }),
-      });
-
+      const genreParam = selectedGenres.length > 0 ? selectedGenres.join(',') : '';
+      const moodParam = selectedMoods.length > 0 ? selectedMoods.join(',') : '';
+      
+      const response = await fetch(
+        `${BACKEND_URL}/api/movies/random?genres=${genreParam}&moods=${moodParam}&count=8`
+      );
+      
       if (!response.ok) {
-        throw new Error('Failed to generate replies');
+        throw new Error('Failed to fetch movies');
       }
-
+      
       const data = await response.json();
-      setReplies(data.replies);
-      setEmailType(data.email_type);
-      setShowSingleReply(false);
+      
+      if (data.movies.length === 0) {
+        setError('No movies found matching your criteria. Try different filters.');
+        setIsLoading(false);
+        return;
+      }
+      
+      setWheelMovies(data.movies);
+      setIsSpinning(true);
+      setIsLoading(false);
+      
     } catch (err) {
-      setError(`Error generating replies: ${err.message}`);
-    } finally {
+      setError(`Error: ${err.message}`);
       setIsLoading(false);
     }
   };
 
-  const handleGenerateSingleReply = async () => {
-    if (!originalEmail.trim()) {
-      setError('Please enter an email to generate a reply');
-      return;
-    }
+  const handleSpinComplete = (selectedMovie) => {
+    setSelectedMovie(selectedMovie);
+    setIsSpinning(false);
+    setShowResult(true);
+    setSpinCount(prev => prev + 1);
+    
+    // Save to localStorage
+    const result = {
+      selectedMovie,
+      wheelMovies,
+      timestamp: new Date().toISOString()
+    };
+    localStorage.setItem('streamroulette_last_result', JSON.stringify(result));
+  };
 
-    setIsLoading(true);
-    setError('');
-    setReplies([]);
-
-    try {
-      const response = await fetch(`${BACKEND_URL}/api/generate-single-reply`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          original_email: originalEmail,
-          context: context,
-          user_name: userName,
-          tone: selectedTone
-        }),
+  const handleShare = () => {
+    if (!selectedMovie) return;
+    
+    const shareText = `🎬 StreamRoulette picked "${selectedMovie.title}" (${selectedMovie.year}) for me! ⭐ ${selectedMovie.rating}/10\n\n${selectedMovie.description}\n\nTry it yourself at StreamRoulette!`;
+    
+    if (navigator.share) {
+      navigator.share({
+        title: 'StreamRoulette Result',
+        text: shareText,
+        url: window.location.href
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to generate reply');
-      }
-
-      const data = await response.json();
-      setReplies([data]);
-      setEmailType(data.email_type);
-      setShowSingleReply(true);
-    } catch (err) {
-      setError(`Error generating reply: ${err.message}`);
-    } finally {
-      setIsLoading(false);
+    } else {
+      navigator.clipboard.writeText(shareText);
+      alert('Result copied to clipboard!');
     }
   };
 
-  const copyToClipboard = (text, replyId) => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopiedId(replyId);
-      setTimeout(() => setCopiedId(''), 2000);
-    });
-  };
-
-  const loadSampleEmail = (sample) => {
-    setOriginalEmail(sample.content);
-    setContext(`This is a sample ${sample.type.toLowerCase()} email.`);
-    setUserName('John Doe');
-  };
-
-  const getToneColor = (tone) => {
-    switch (tone) {
-      case 'professional': return 'bg-blue-100 text-blue-800';
-      case 'enthusiastic': return 'bg-green-100 text-green-800';
-      case 'casual': return 'bg-purple-100 text-purple-800';
-      default: return 'bg-gray-100 text-gray-800';
-    }
-  };
-
-  const getTypeColor = (type) => {
-    switch (type) {
-      case 'interview_invitation': return 'bg-blue-100 text-blue-800';
-      case 'job_offer': return 'bg-green-100 text-green-800';
-      case 'recruiter_outreach': return 'bg-purple-100 text-purple-800';
-      case 'networking': return 'bg-yellow-100 text-yellow-800';
-      case 'follow_up': return 'bg-orange-100 text-orange-800';
-      default: return 'bg-gray-100 text-gray-800';
-    }
-  };
-
-  const formatType = (type) => {
-    return type.split('_').map(word => 
-      word.charAt(0).toUpperCase() + word.slice(1)
-    ).join(' ');
+  const resetSpin = () => {
+    setShowResult(false);
+    setSelectedMovie(null);
+    setWheelMovies([]);
+    setIsSpinning(false);
+    localStorage.removeItem('streamroulette_last_result');
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      <div className="container mx-auto px-4 py-8">
-        <div className="max-w-4xl mx-auto">
-          {/* Header */}
-          <div className="text-center mb-8">
-            <h1 className="text-4xl font-bold text-gray-900 mb-2">
-              AI Email Reply Assistant
+    <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900">
+      {/* Background Animation */}
+      <div className="fixed inset-0 overflow-hidden">
+        <motion.div
+          className="absolute inset-0 opacity-20"
+          animate={{
+            backgroundPosition: ['0% 0%', '100% 100%'],
+          }}
+          transition={{
+            duration: 20,
+            repeat: Infinity,
+            ease: 'linear'
+          }}
+          style={{
+            backgroundImage: 'radial-gradient(circle at 20% 50%, rgba(120, 119, 198, 0.3) 0%, transparent 50%), radial-gradient(circle at 80% 20%, rgba(255, 119, 198, 0.3) 0%, transparent 50%)',
+            backgroundSize: '400% 400%'
+          }}
+        />
+      </div>
+
+      <div className="relative z-10">
+        {/* Header */}
+        <motion.header 
+          className="text-center py-12 px-4"
+          initial={{ opacity: 0, y: -50 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.8 }}
+        >
+          <motion.div
+            className="inline-block"
+            whileHover={{ scale: 1.05 }}
+            transition={{ type: "spring", stiffness: 300 }}
+          >
+            <h1 className="text-6xl md:text-8xl font-bold text-white mb-4 bg-gradient-to-r from-pink-400 via-purple-400 to-blue-400 bg-clip-text text-transparent">
+              StreamRoulette
             </h1>
-            <p className="text-lg text-gray-600 mb-6">
-              Generate professional email replies for job seekers with AI assistance
-            </p>
+          </motion.div>
+          <motion.p 
+            className="text-xl md:text-2xl text-blue-100 mb-2 max-w-2xl mx-auto"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.3, duration: 0.6 }}
+          >
+            Spin the wheel and discover your next favorite movie!
+          </motion.p>
+          <motion.p 
+            className="text-lg text-blue-200 max-w-xl mx-auto"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.5, duration: 0.6 }}
+          >
+            Select your preferences and let fate decide what you watch tonight
+          </motion.p>
+          
+          {/* Stats */}
+          {stats.total_movies && (
+            <motion.div 
+              className="flex justify-center items-center space-x-6 mt-6 text-blue-200"
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: 0.7, duration: 0.5 }}
+            >
+              <div className="flex items-center space-x-2">
+                <Film className="w-5 h-5" />
+                <span>{stats.total_movies}+ Movies</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Trophy className="w-5 h-5" />
+                <span>{stats.total_spins || 0} Spins</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Sparkles className="w-5 h-5" />
+                <span>{spinCount} Your Spins</span>
+              </div>
+            </motion.div>
+          )}
+        </motion.header>
+
+        {/* Main Content */}
+        <div className="container mx-auto px-4 pb-12">
+          <div className="max-w-6xl mx-auto">
             
-            {/* Sample Emails */}
-            <div className="mb-6">
-              <h2 className="text-lg font-semibold text-gray-800 mb-3">Try with sample emails:</h2>
-              <div className="flex flex-wrap gap-2 justify-center">
-                {sampleEmails.map((sample, index) => (
-                  <button
-                    key={index}
-                    onClick={() => loadSampleEmail(sample)}
-                    className="px-4 py-2 text-sm bg-white text-blue-600 border border-blue-300 rounded-lg hover:bg-blue-50 transition-colors"
-                  >
-                    {sample.type}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
+            {/* Filter Panel */}
+            <motion.div
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.4, duration: 0.6 }}
+            >
+              <FilterPanel
+                genres={genres}
+                moods={moods}
+                selectedGenres={selectedGenres}
+                selectedMoods={selectedMoods}
+                onGenreChange={setSelectedGenres}
+                onMoodChange={setSelectedMoods}
+                onReset={resetSpin}
+              />
+            </motion.div>
 
-          {/* Input Form */}
-          <div className="bg-white rounded-xl shadow-lg p-6 mb-8">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Your Name (Optional)
-                </label>
-                <input
-                  type="text"
-                  value={userName}
-                  onChange={(e) => setUserName(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="John Doe"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Response Tone
-                </label>
-                <select
-                  value={selectedTone}
-                  onChange={(e) => setSelectedTone(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            {/* Error Message */}
+            <AnimatePresence>
+              {error && (
+                <motion.div
+                  className="max-w-md mx-auto mb-8 p-4 bg-red-500/20 border border-red-500/50 rounded-lg"
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.8 }}
+                  transition={{ duration: 0.3 }}
                 >
-                  {availableTones.map(tone => (
-                    <option key={tone.value} value={tone.value}>
-                      {tone.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Original Email *
-              </label>
-              <textarea
-                value={originalEmail}
-                onChange={(e) => setOriginalEmail(e.target.value)}
-                rows={8}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="Paste the email you received here..."
-              />
-            </div>
-
-            <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Additional Context (Optional)
-              </label>
-              <textarea
-                value={context}
-                onChange={(e) => setContext(e.target.value)}
-                rows={3}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="Any additional context about your situation, preferences, or specific points you want to address..."
-              />
-            </div>
-
-            {error && (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
-                <p className="text-red-800">{error}</p>
-              </div>
-            )}
-
-            <div className="flex flex-col sm:flex-row gap-4">
-              <button
-                onClick={handleGenerateReplies}
-                disabled={isLoading}
-                className="flex-1 bg-blue-600 text-white py-3 px-6 rounded-lg font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {isLoading ? 'Generating...' : 'Generate Multiple Replies'}
-              </button>
-              <button
-                onClick={handleGenerateSingleReply}
-                disabled={isLoading}
-                className="flex-1 bg-green-600 text-white py-3 px-6 rounded-lg font-semibold hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {isLoading ? 'Generating...' : 'Generate Single Reply'}
-              </button>
-            </div>
-          </div>
-
-          {/* Loading State */}
-          {isLoading && (
-            <div className="text-center py-8">
-              <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-              <p className="mt-4 text-gray-600">Generating your professional email replies...</p>
-            </div>
-          )}
-
-          {/* Results */}
-          {replies.length > 0 && (
-            <div className="space-y-6">
-              {emailType && (
-                <div className="text-center">
-                  <span className={`inline-block px-4 py-2 rounded-full text-sm font-medium ${getTypeColor(emailType)}`}>
-                    Email Type: {formatType(emailType)}
-                  </span>
-                </div>
+                  <p className="text-red-200 text-center">{error}</p>
+                </motion.div>
               )}
+            </AnimatePresence>
 
-              {replies.map((reply, index) => (
-                <div key={reply.reply_id} className="bg-white rounded-xl shadow-lg p-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center space-x-3">
-                      <h3 className="text-lg font-semibold text-gray-900">
-                        {showSingleReply ? 'Generated Reply' : `Reply Option ${index + 1}`}
-                      </h3>
-                      {!showSingleReply && (
-                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${getToneColor(reply.tone)}`}>
-                          {reply.tone.charAt(0).toUpperCase() + reply.tone.slice(1)}
-                        </span>
-                      )}
-                    </div>
-                    <button
-                      onClick={() => copyToClipboard(reply.reply_content, reply.reply_id)}
-                      className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm font-medium"
-                    >
-                      {copiedId === reply.reply_id ? 'Copied!' : 'Copy'}
-                    </button>
+            {/* Roulette Wheel */}
+            <motion.div
+              className="flex justify-center mb-12"
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: 0.6, duration: 0.6 }}
+            >
+              <RouletteWheel
+                movies={wheelMovies}
+                isSpinning={isSpinning}
+                onSpinComplete={handleSpinComplete}
+                isLoading={isLoading}
+              />
+            </motion.div>
+
+            {/* Spin Button */}
+            <motion.div
+              className="flex justify-center mb-12"
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.8, duration: 0.6 }}
+            >
+              <motion.button
+                onClick={handleSpin}
+                disabled={isSpinning || isLoading}
+                className={`px-8 py-4 rounded-full font-bold text-lg transition-all duration-300 ${
+                  isSpinning || isLoading
+                    ? 'bg-gray-600 cursor-not-allowed'
+                    : 'bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 transform hover:scale-105'
+                } text-white shadow-lg`}
+                whileHover={{ scale: isSpinning || isLoading ? 1 : 1.05 }}
+                whileTap={{ scale: isSpinning || isLoading ? 1 : 0.95 }}
+              >
+                {isLoading ? (
+                  <div className="flex items-center space-x-2">
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span>Finding Movies...</span>
                   </div>
-                  
-                  <div className="bg-gray-50 rounded-lg p-4">
-                    <pre className="whitespace-pre-wrap text-gray-800 font-sans">
-                      {reply.reply_content}
-                    </pre>
+                ) : isSpinning ? (
+                  <div className="flex items-center space-x-2">
+                    <RotateCw className="w-5 h-5 animate-spin" />
+                    <span>Spinning...</span>
                   </div>
-                </div>
-              ))}
-            </div>
-          )}
+                ) : (
+                  <div className="flex items-center space-x-2">
+                    <Play className="w-5 h-5" />
+                    <span>Spin the Wheel!</span>
+                  </div>
+                )}
+              </motion.button>
+            </motion.div>
+
+            {/* Movie Result */}
+            <AnimatePresence>
+              {showResult && selectedMovie && (
+                <motion.div
+                  className="max-w-4xl mx-auto"
+                  initial={{ opacity: 0, y: 50 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -50 }}
+                  transition={{ duration: 0.6 }}
+                >
+                  <MovieCard 
+                    movie={selectedMovie} 
+                    onShare={handleShare}
+                    onSpinAgain={resetSpin}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
         </div>
       </div>
     </div>
