@@ -1,5 +1,5 @@
 # === FRONTEND STAGE ===
-FROM node:18 as frontend
+FROM node:20 as frontend  # <- Changed from node:18 to node:20
 
 WORKDIR /app
 
@@ -20,7 +20,7 @@ COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend code
-COPY backend/ .
+COPY backend/ ./
 
 # Copy frontend build from previous stage
 COPY --from=frontend /app/dist ./frontend_build
