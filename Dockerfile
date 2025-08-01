@@ -1,20 +1,29 @@
-# ---- FRONTEND ----
-FROM node:20 AS frontend
+# ---------- FRONTEND BUILD ----------
+FROM node:18 AS frontend
 WORKDIR /app/frontend
+
+# Install frontend dependencies and build
 COPY frontend/package.json frontend/yarn.lock ./
 RUN yarn install
 COPY frontend .
 RUN yarn build
 
-# ---- BACKEND ----
-FROM node:20 AS backend
-WORKDIR /app/backend
-COPY backend/package.json backend/package-lock.json ./
-RUN npm install
+# ---------- BACKEND ----------
+FROM python:3.10-slim AS backend
+WORKDIR /app
+
+# Install backend dependencies
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy backend code
 COPY backend .
 
-# Copy built frontend into backend/public
-COPY --from=frontend /app/frontend/dist ./public
+# Copy frontend build into backend (to serve static files if needed)
+COPY --from=frontend /app/frontend/build ./frontend_build
 
-# Start server
-CMD ["node", "index.js"]
+# Expose your backend port (adjust if needed)
+EXPOSE 5000
+
+# Run the backend
+CMD ["python", "server.py"]
