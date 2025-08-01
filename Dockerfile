@@ -1,5 +1,5 @@
 # === FRONTEND STAGE ===
-FROM node:20 as frontend  # <- Changed from node:18 to node:20
+FROM node:20 as frontend  
 
 WORKDIR /app
 
