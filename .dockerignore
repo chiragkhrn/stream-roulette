@@ -1,8 +1,8 @@
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
 node_modules/
 frontend/node_modules/
-*.pyc
-.DS_Store
+.env
 .git
-*.md
-tests/
