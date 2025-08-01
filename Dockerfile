@@ -1,29 +1,33 @@
-# ---------- FRONTEND BUILD ----------
+### STAGE 1: Build React frontend ###
 FROM node:18 AS frontend
+
 WORKDIR /app/frontend
 
-# Install frontend dependencies and build
+# Install dependencies and build
 COPY frontend/package.json frontend/yarn.lock ./
 RUN yarn install
+
 COPY frontend .
 RUN yarn build
 
-# ---------- BACKEND ----------
+
+### STAGE 2: Backend with Python ###
 FROM python:3.10-slim AS backend
+
 WORKDIR /app
 
 # Install backend dependencies
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend code
+# Copy backend source code
 COPY backend .
 
-# Copy frontend build into backend (to serve static files if needed)
+# Copy built frontend (from stage 1)
 COPY --from=frontend /app/frontend/build ./frontend_build
 
-# Expose your backend port (adjust if needed)
+# Expose port (adjust if needed)
 EXPOSE 5000
 
-# Run the backend
+# Run the backend server
 CMD ["python", "server.py"]
