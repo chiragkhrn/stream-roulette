@@ -1,0 +1,8 @@
+__pycache__/
+node_modules/
+frontend/node_modules/
+*.pyc
+.DS_Store
+.git
+*.md
+tests/
