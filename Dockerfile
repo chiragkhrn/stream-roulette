@@ -1,5 +1,5 @@
 # === FRONTEND STAGE ===
-FROM node:20 as frontend  
+FROM node:20 as frontend
 
 WORKDIR /app
 
@@ -22,9 +22,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend code
 COPY backend/ ./
 
-# Copy frontend build from previous stage
-COPY --from=frontend /app/dist ./frontend_build
+# ✅ Correct path here:
+COPY --from=frontend /app/build ./frontend_build
 
-# Expose port and run
 EXPOSE 5000
 CMD ["python", "server.py"]
