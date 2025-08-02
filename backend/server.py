@@ -9,6 +9,26 @@ import random
 from datetime import datetime
 import uuid
 import logging
+from flask import Flask, send_from_directory, jsonify
+import os
+
+app = Flask(__name__, static_folder='frontend_build')
+
+@app.route('/api/ping')
+def ping():
+    return jsonify({"message": "pong"})
+
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve_react(path):
+    if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
+        return send_from_directory(app.static_folder, path)
+    else:
+        return send_from_directory(app.static_folder, 'index.html')
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(debug=False, host='0.0.0.0', port=port)
 
 # Load environment variables
 load_dotenv()
